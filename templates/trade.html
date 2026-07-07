@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交易 - 校园证券交易所</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="navbar-brand">🏦 校园证券交易所</div>
+        <div class="navbar-links">
+            <a href="/dashboard">📊 仪表盘</a>
+            <a href="/trade" class="active">💹 交易</a>
+            <a href="/quiz">📝 答题</a>
+            <a href="/api/logout">🚪 退出</a>
+        </div>
+        <div class="navbar-user">
+            <span>👤 {{ user.username }}</span>
+            <span class="cash-badge">💰 {{ "%.1f"|format(user.cash) }} 点</span>
+        </div>
+    </nav>
+
+    <!-- 游戏状态条 -->
+    <div class="game-bar">
+        <div class="game-info">
+            <span class="day-label">📅 当前进度</span>
+            <span class="day-value" id="current-day">
+                {% if state.current_day > 0 %}
+                    第 {{ state.current_day }} 天
+                {% else %}
+                    准备开始
+                {% endif %}
+            </span>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-bar" style="width: {{ (state.current_day / total_days * 100) if total_days > 0 else 0 }}%"></div>
+            </div>
+            <span style="font-size:12px;color:var(--text-muted);">⏱ 10s/天</span>
+        </div>
+        <div class="game-controls">
+            {% if state.current_day < total_days %}
+                <button id="btn-start" class="btn btn-success btn-sm" onclick="startGame()">▶ 自动</button>
+                <button id="btn-pause" class="btn btn-outline btn-sm" onclick="pauseGame()" style="display:none;">⏸ 暂停</button>
+                <button id="btn-step" class="btn btn-outline btn-sm" onclick="advanceOneDay()" title="手动推进一天">⏭ 一天</button>
+                <div class="speed-group">
+                    <button class="speed-btn active" data-speed="1" onclick="setSpeed(1)">1x</button>
+                    <button class="speed-btn" data-speed="2" onclick="setSpeed(2)">2x</button>
+                    <button class="speed-btn" data-speed="3" onclick="setSpeed(3)">3x</button>
+                </div>
+            {% endif %}
+            <button class="btn btn-sm btn-outline" onclick="resetGame()" title="重置当前存档" style="color:var(--red);border-color:rgba(239,83,80,0.4);">🔄 重置</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="trade-layout">
+            <!-- 左侧交易面板 -->
+            <div>
+                <div class="trade-panel">
+                    <div class="card-title" style="margin-bottom:16px;">📝 下单</div>
+
+                    <!-- 买卖切换 -->
+                    <div class="login-tabs" style="margin-bottom:16px;">
+                        <button class="login-tab active" onclick="switchOrderType('buy')">买入</button>
+                        <button class="login-tab" onclick="switchOrderType('sell')">卖出</button>
+                    </div>
+
+                    <div id="trade-error" class="login-error"></div>
+
+                    <!-- 买入表单 -->
+                    <form id="buy-form" class="login-form active" onsubmit="handleBuy(event)">
+                        <div class="form-group">
+                            <label class="form-label">搜索股票</label>
+                            <input type="text" class="form-input" id="buy-search" placeholder="输入名称或代码搜索..." oninput="filterStockList('buy')">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">选择股票</label>
+                            <select name="stock_id" class="form-select" id="buy-stock" onchange="onStockChange('buy')" required>
+                                <option value="">-- 请选择 --</option>
+                                {% for s in stocks %}
+                                <option value="{{ s.id }}" data-price="{{ s.price }}" data-name="{{ s.name }}" data-code="{{ s.code }}" data-category="{{ s.category }}">
+                                    {{ s.code }} · {{ s.name }} — {{ "%.1f"|format(s.price) }} 点 [{{ s.category }}]
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">购买数量（股）</label>
+                            <input type="number" name="quantity" class="form-input" id="buy-qty" 
+                                   placeholder="输入数量" min="1" value="10" required onchange="updateBuyPreview()" oninput="updateBuyPreview()">
+                            <button type="button" class="btn btn-xs" style="margin-top:6px;background:var(--gold);color:#000;width:100%;"
+                                    onclick="allIn()" title="用全部可用资金购买此股票">全仓买入</button>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">杠杆倍数</label>
+                            <div class="leverage-options" id="buy-leverage-group">
+                                {% for lev in leverage_options %}
+                                <div class="leverage-btn {% if lev == 1 %}selected{% endif %}" 
+                                     onclick="selectLeverage('buy', {{ lev }})" data-lev="{{ lev }}">
+                                    {{ lev }}x
+                                    <small style="display:block;font-size:10px;opacity:0.7">{% if lev == 1 %}保守{% elif lev == 2 %}谨慎{% elif lev == 3 %}激进{% else %}最高{% endif %}</small>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            <input type="hidden" name="leverage" id="buy-leverage" value="1">
+                        </div>
+
+                        <div class="trade-summary" id="buy-summary">
+                            <div class="row"><span>当前价格</span><span id="buy-price-display">—</span></div>
+                            <div class="row"><span>股票代码</span><span id="buy-code-display">—</span></div>
+                            <div class="row"><span>总价值</span><span id="buy-total-value">—</span></div>
+                            <div class="row"><span>杠杆倍数</span><span id="buy-lev-display">1x</span></div>
+                            <div class="row total"><span>所需保证金</span><span id="buy-margin">—</span></div>
+                        </div>
+
+                        <button type="submit" class="btn btn-success btn-lg" style="width:100%;">确认买入</button>
+                    </form>
+
+                    <!-- 卖出表单 -->
+                    <form id="sell-form" class="login-form" onsubmit="handleSell(event)">
+                        <div class="form-group">
+                            <label class="form-label">搜索持仓</label>
+                            <input type="text" class="form-input" id="sell-search" placeholder="输入名称或代码搜索..." oninput="filterStockList('sell')">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">选择持仓</label>
+                            <select name="stock_id" class="form-select" id="sell-stock" onchange="onStockChange('sell')" required>
+                                <option value="">-- 请选择 --</option>
+                                {% for sid, h in holdings.items() %}
+                                <option value="{{ sid }}" data-quantity="{{ h.quantity }}" data-price="0" data-avg="{{ h.avg_price }}" data-name="{{ stock_names[sid] }}" data-code="{{ stock_codes[sid] }}">
+                                    {{ stock_codes[sid] }} · {{ stock_names[sid] }} — 持有 {{ h.quantity }} 股
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">卖出数量（股）</label>
+                            <input type="number" name="quantity" class="form-input" id="sell-qty"
+                                   placeholder="输入数量" min="1" value="1" required onchange="updateSellPreview()" oninput="updateSellPreview()">
+                            <button type="button" class="btn btn-xs" style="margin-top:6px;background:var(--red);color:#fff;width:100%;"
+                                    onclick="sellAll()" title="卖出全部持仓">全部卖出</button>
+                            <small style="color:var(--text-muted);" id="sell-max-hint"></small>
+                        </div>
+
+                        <div class="trade-summary" id="sell-summary">
+                            <div class="row"><span>当前价格</span><span id="sell-price-display">—</span></div>
+                            <div class="row"><span>卖出金额</span><span id="sell-total-value">—</span></div>
+                            <div class="row"><span>成本价</span><span id="sell-cost-display">—</span></div>
+                            <div class="row total"><span>预估盈亏</span><span id="sell-profit">—</span></div>
+                        </div>
+
+                        <button type="submit" class="btn btn-danger btn-lg" style="width:100%;">确认卖出</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- 右侧K线图 + 新闻 + 知识提示 -->
+            <div style="display:flex;flex-direction:column;gap:16px;">
+                <!-- 知识提示 -->
+                <div class="card" style="border-color:rgba(255,213,79,0.25);background:linear-gradient(135deg, rgba(255,213,79,0.05), rgba(66,165,245,0.05));padding:12px 16px;">
+                    <div style="font-size:13px;font-weight:700;color:var(--gold);margin-bottom:8px;">💡 交易小提示</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:11px;">
+                        <span style="background:rgba(38,166,154,0.15);color:var(--green);padding:3px 8px;border-radius:4px;">📈 止盈：涨到目标价主动卖出锁定利润</span>
+                        <span style="background:rgba(239,83,80,0.15);color:var(--red);padding:3px 8px;border-radius:4px;">📉 止损：行情变差及时卖出防止越亏越多</span>
+                        <span style="background:rgba(255,152,0,0.15);color:#ff9800;padding:3px 8px;border-radius:4px;">⚠ 新手严禁使用杠杆交易</span>
+                        <span style="background:rgba(156,39,176,0.15);color:#9c27b0;padding:3px 8px;border-radius:4px;">🚫 远离*ST风险股和连续涨停</span>
+                        <span style="background:rgba(66,165,245,0.15);color:var(--accent);padding:3px 8px;border-radius:4px;">💡 利好落地有时"兑现下跌"，别盲目追高</span>
+                        <span style="background:rgba(255,213,79,0.12);color:var(--gold);padding:3px 8px;border-radius:4px;">📋 通过答题可获得额外资金</span>
+                    </div>
+                </div>
+                <!-- K线图（缩小版） -->
+                <div class="chart-container" id="chart-container">
+                    <div class="chart-header">
+                        <span class="chart-title" id="chart-title">📈 选择股票查看K线图</span>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="text" class="form-input" style="width:160px;" id="kline-search" placeholder="搜索股票..." oninput="filterKlineList()">
+                            <select class="form-select" style="width:auto;min-width:160px;" id="kline-select" onchange="loadKline()">
+                                <option value="">-- 选择股票 --</option>
+                                {% for s in stocks %}
+                                <option value="{{ s.id }}" data-name="{{ s.name }}">{{ s.code }} · {{ s.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <button class="btn btn-sm btn-outline" onclick="refreshKline()" title="刷新K线">🔄</button>
+                            <button class="btn btn-sm btn-outline" onclick="toggleKlineExpand()" title="放大/缩小K线" id="btn-expand">🔍</button>
+                        </div>
+                    </div>
+                    <div class="chart-body" id="kline-chart" style="height:300px;"></div>
+                </div>
+
+                <!-- 新闻公告（K线图下方） -->
+                <div class="card" style="border-color:rgba(255,213,79,0.3);">
+                    <div class="card-header">
+                        <span class="card-title">📰 新闻公告</span>
+                        <span style="font-size:11px;color:var(--text-muted);">📢 已发布 · 🔥 生效中</span>
+                    </div>
+                    <div class="table-scroll" style="max-height:200px;" id="news-panel">
+                        {% if news %}
+                        {% for n in news %}
+                        <div class="news-item" style="padding:8px 12px;border-bottom:1px solid rgba(42,58,74,0.5);">
+                            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                                <strong style="font-size:13px;">{{ n.title }}</strong>
+                                <span class="event-status {{ n.status }}" style="flex-shrink:0;margin-left:6px;">{{ n.status_label }}</span>
+                            </div>
+                            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">{{ n.description[:60] }}{% if n.description|length > 60 %}...{% endif %}</div>
+                        </div>
+                        {% endfor %}
+                        {% else %}
+                        <div class="empty-state" style="padding:16px;"><p style="font-size:12px;">暂无新闻</p></div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <script>
+        let klineChart = null;
+        let currentKlineStock = null;
+        let currentOrderType = 'buy';
+        let pendingRequest = false;
+        let klineExpanded = false;
+        let gameTimer = null;
+        let autoAdvanceEnabled = false;
+        let gameSpeed = 1;
+        const BASE_INTERVAL = 10000;
+
+        // 所有股票完整信息（用于全仓计算等）
+        const allStocks = [
+            {% for s in stocks %}
+            {id:"{{ s.id }}", code:"{{ s.code }}", name:"{{ s.name }}", price:{{ s.price }}, category:"{{ s.category }}"},
+            {% endfor %}
+        ];
+
+        // 当前价格表
+        const currentPrices = {
+            {% for s in stocks %}
+            "{{ s.id }}": {{ s.price }},
+            {% endfor %}
+        };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            initChart();
+            updateBuyPreview();
+            syncUI(false);
+            // 给卖出持仓填充当前价格
+            document.querySelectorAll('#sell-stock option[data-avg]').forEach(opt => {
+                const sid = opt.value;
+                if (currentPrices[sid] !== undefined) {
+                    opt.dataset.price = currentPrices[sid];
+                }
+            });
+            // 如果从仪表盘跳转，自动加载K线
+            {% if focus_stock %}
+            setTimeout(() => {
+                const sel = document.getElementById('kline-select');
+                if (sel) {
+                    sel.value = '{{ focus_stock }}';
+                    loadKline();
+                }
+            }, 500);
+            {% endif %}
+        });
+
+        // ===== 自动推进逻辑 =====
+        function syncUI(running) {
+            document.getElementById('btn-start').style.display = running ? 'none' : 'inline-flex';
+            document.getElementById('btn-pause').style.display = running ? 'inline-flex' : 'none';
+        }
+
+        function startGame() {
+            autoAdvanceEnabled = true;
+            syncUI(true);
+            scheduleNext();
+        }
+
+        function pauseGame() {
+            autoAdvanceEnabled = false;
+            syncUI(false);
+            clearGameTimer();
+            pendingRequest = false;
+        }
+
+        function clearGameTimer() {
+            if (gameTimer) { clearTimeout(gameTimer); gameTimer = null; }
+        }
+
+        function scheduleNext() {
+            clearGameTimer();
+            if (!autoAdvanceEnabled) return;
+            const delay = Math.round(BASE_INTERVAL / gameSpeed);
+            gameTimer = setTimeout(autoAdvanceTick, delay);
+        }
+
+        function setSpeed(speed) {
+            gameSpeed = speed;
+            document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+            const btn = document.querySelector('.speed-btn[data-speed="' + speed + '"]');
+            if (btn) btn.classList.add('active');
+            clearGameTimer();
+            if (!pendingRequest && autoAdvanceEnabled) {
+                autoAdvanceTick();
+            }
+        }
+
+        async function autoAdvanceTick() {
+            if (!autoAdvanceEnabled || pendingRequest) return;
+            pendingRequest = true;
+
+            try {
+                const resp = await fetch('/api/advance_day', { method: 'POST' });
+                const data = await resp.json();
+
+                if (data.game_over) { 
+                    autoAdvanceEnabled = false;
+                    syncUI(false);
+                    clearGameTimer();
+                    showToast('游戏结束！', 'success'); 
+                    setTimeout(() => location.reload(), 2500); 
+                    return; 
+                }
+
+                if (data.break_notice) { 
+                    autoAdvanceEnabled = false;
+                    syncUI(false);
+                    clearGameTimer();
+                    showToast('🏖️ ' + data.break_notice + ' 游戏已暂停，点击"自动"继续～', 'success'); 
+                    setTimeout(() => location.reload(), 3500); 
+                    return; 
+                }
+
+                updateUIOnAdvance(data);
+            } catch (err) { 
+                console.error('推进失败:', err); 
+            }
+
+            pendingRequest = false;
+            scheduleNext();
+        }
+
+        async function advanceOneDay() {
+            if (pendingRequest) return;
+            pendingRequest = true;
+            const btn = document.getElementById('btn-step');
+            btn.disabled = true;
+            btn.textContent = '⏳...';
+
+            try {
+                const resp = await fetch('/api/advance_day', { method: 'POST' });
+                const data = await resp.json();
+
+                if (data.game_over) { 
+                    autoAdvanceEnabled = false;
+                    syncUI(false);
+                    clearGameTimer();
+                    showToast('游戏结束！', 'success'); 
+                    setTimeout(() => location.reload(), 2500); 
+                    return; 
+                }
+
+                if (data.break_notice) { 
+                    showToast('🏖️ ' + data.break_notice + ' 游戏已暂停～', 'success'); 
+                    setTimeout(() => location.reload(), 3500); 
+                    return; 
+                }
+
+                updateUIOnAdvance(data);
+            } catch (err) { 
+                console.error('推进失败:', err); 
+                showToast('推进失败，请重试', 'error');
+            }
+
+            pendingRequest = false;
+            btn.disabled = false;
+            btn.textContent = '⏭ 一天';
+        }
+
+        function updateUIOnAdvance(data) {
+            document.getElementById('current-day').textContent = '第 ' + data.day + ' 天';
+            document.getElementById('progress-bar').style.width = (data.day / {{ total_days }} * 100).toFixed(1) + '%';
+
+            // 更新所有价格
+            if (data.prices_simple) {
+                document.querySelectorAll('#buy-stock option').forEach(opt => {
+                    if (data.prices_simple[opt.value] !== undefined) {
+                        opt.dataset.price = data.prices_simple[opt.value];
+                        const code = opt.dataset.code || '';
+                        const name = opt.dataset.name || '';
+                        const cat = opt.dataset.category || '';
+                        opt.textContent = code + ' · ' + name + ' — ' + data.prices_simple[opt.value].toFixed(1) + ' 点 [' + cat + ']';
+                    }
+                });
+                document.querySelectorAll('#sell-stock option').forEach(opt => {
+                    if (data.prices_simple[opt.value] !== undefined) {
+                        opt.dataset.price = data.prices_simple[opt.value];
+                    }
+                });
+                Object.assign(currentPrices, data.prices_simple);
+                // 同步 allStocks
+                allStocks.forEach(s => {
+                    if (data.prices_simple[s.id] !== undefined) s.price = data.prices_simple[s.id];
+                });
+                
+                // 自动刷新K线
+                if (currentKlineStock) {
+                    refreshKlineSilent();
+                }
+            }
+
+            // 更新新闻面板
+            if (data.news) {
+                const newsPanel = document.getElementById('news-panel');
+                if (newsPanel) {
+                    if (data.news.length > 0) {
+                        let html = '';
+                        data.news.forEach(n => {
+                            html += '<div class="news-item" style="padding:8px 12px;border-bottom:1px solid rgba(42,58,74,0.5);">' +
+                                '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
+                                '<strong style="font-size:13px;">' + n.title + '</strong>' +
+                                '<span class="event-status ' + n.status + '" style="flex-shrink:0;margin-left:6px;">' + n.status_label + '</span>' +
+                                '</div>' +
+                                '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">' + 
+                                n.description.substring(0, 60) + (n.description.length > 60 ? '...' : '') +
+                                '</div></div>';
+                        });
+                        newsPanel.innerHTML = html;
+                    } else {
+                        newsPanel.innerHTML = '<div class="empty-state" style="padding:16px;"><p style="font-size:12px;">暂无新闻</p></div>';
+                    }
+                }
+            }
+
+            updateBuyPreview();
+            updateSellPreview();
+        }
+
+        function toggleKlineExpand() {
+            const chartBody = document.getElementById('kline-chart');
+            const btn = document.getElementById('btn-expand');
+            klineExpanded = !klineExpanded;
+            chartBody.style.height = klineExpanded ? '600px' : '300px';
+            btn.textContent = klineExpanded ? '🔎' : '🔍';
+            btn.title = klineExpanded ? '缩小K线' : '放大K线';
+            if (klineChart) klineChart.resize();
+        }
+
+        function allIn() {
+            const select = document.getElementById('buy-stock');
+            if (!select.value) {
+                document.getElementById('trade-error').textContent = '请先选择股票';
+                document.getElementById('trade-error').style.display = 'block';
+                return;
+            }
+            const option = select.selectedOptions[0];
+            const price = parseFloat(option.dataset.price);
+            const leverage = parseFloat(document.getElementById('buy-leverage').value) || 1;
+            const cash = {{ user.cash }};
+            const maxQty = Math.floor(cash * leverage / price);
+            if (maxQty < 1) {
+                document.getElementById('trade-error').textContent = '资金不足，无法购买';
+                document.getElementById('trade-error').style.display = 'block';
+                return;
+            }
+            document.getElementById('buy-qty').value = maxQty;
+            updateBuyPreview();
+        }
+
+        function sellAll() {
+            const select = document.getElementById('sell-stock');
+            if (!select.value) {
+                document.getElementById('trade-error').textContent = '请先选择持仓';
+                document.getElementById('trade-error').style.display = 'block';
+                return;
+            }
+            const option = select.selectedOptions[0];
+            const maxQty = parseInt(option.dataset.quantity) || 0;
+            if (maxQty < 1) {
+                document.getElementById('trade-error').textContent = '没有可卖持仓';
+                document.getElementById('trade-error').style.display = 'block';
+                return;
+            }
+            document.getElementById('sell-qty').value = maxQty;
+            updateSellPreview();
+        }
+
+        function filterStockList(type) {
+            const search = document.getElementById(type + '-search').value.toLowerCase();
+            const select = document.getElementById(type + '-stock');
+            select.querySelectorAll('option:not([value=""])').forEach(opt => {
+                const text = (opt.dataset.name || '').toLowerCase();
+                const code = (opt.dataset.code || '').toLowerCase();
+                opt.style.display = (text.includes(search) || code.includes(search)) ? '' : 'none';
+            });
+        }
+
+        function filterKlineList() {
+            const search = document.getElementById('kline-search').value.toLowerCase();
+            const select = document.getElementById('kline-select');
+            select.querySelectorAll('option:not([value=""])').forEach(opt => {
+                const name = (opt.dataset.name || opt.textContent).toLowerCase();
+                opt.style.display = name.includes(search) ? '' : 'none';
+            });
+        }
+
+        function initChart() { 
+            const dom = document.getElementById('kline-chart'); 
+            klineChart = echarts.init(dom, 'dark'); 
+        }
+
+        function switchOrderType(type) {
+            currentOrderType = type;
+            document.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
+            const tabBtn = document.querySelector('.login-tab[onclick*="' + type + '"]');
+            if (tabBtn) tabBtn.classList.add('active');
+            
+            document.getElementById('buy-form').classList.remove('active');
+            document.getElementById('sell-form').classList.remove('active');
+            document.getElementById(type + '-form').classList.add('active');
+            
+            document.getElementById('trade-error').style.display = 'none';
+        }
+
+        function selectLeverage(type, value) {
+            const group = document.getElementById(type + '-leverage-group');
+            group.querySelectorAll('.leverage-btn').forEach(b => b.classList.remove('selected'));
+            const btn = group.querySelector('[data-lev="' + value + '"]');
+            if (btn) btn.classList.add('selected');
+            document.getElementById(type + '-leverage').value = value;
+            if (type === 'buy') updateBuyPreview();
+        }
+
+        function onStockChange(type) {
+            if (type === 'buy') updateBuyPreview();
+            else updateSellPreview();
+        }
+
+        function updateBuyPreview() {
+            const select = document.getElementById('buy-stock');
+            const qty = parseInt(document.getElementById('buy-qty').value) || 0;
+            const leverage = parseFloat(document.getElementById('buy-leverage').value) || 1;
+            
+            if (!select.value || qty <= 0) {
+                document.getElementById('buy-price-display').textContent = '—';
+                document.getElementById('buy-code-display').textContent = '—';
+                document.getElementById('buy-total-value').textContent = '—';
+                document.getElementById('buy-margin').textContent = '—';
+                return;
+            }
+
+            const option = select.selectedOptions[0];
+            const price = parseFloat(option.dataset.price);
+            const code = option.dataset.code || '';
+            const total = price * qty;
+            const margin = total / leverage;
+
+            document.getElementById('buy-price-display').textContent = price.toFixed(1) + ' 点';
+            document.getElementById('buy-code-display').textContent = code;
+            document.getElementById('buy-total-value').textContent = total.toFixed(1) + ' 点';
+            document.getElementById('buy-lev-display').textContent = leverage + 'x';
+            document.getElementById('buy-margin').textContent = margin.toFixed(1) + ' 点';
+        }
+
+        function updateSellPreview() {
+            const select = document.getElementById('sell-stock');
+            const qty = parseInt(document.getElementById('sell-qty').value) || 0;
+            
+            if (!select.value) {
+                document.getElementById('sell-price-display').textContent = '—';
+                document.getElementById('sell-total-value').textContent = '—';
+                document.getElementById('sell-cost-display').textContent = '—';
+                document.getElementById('sell-profit').textContent = '—';
+                document.getElementById('sell-max-hint').textContent = '';
+                return;
+            }
+
+            const option = select.selectedOptions[0];
+            const maxQty = parseInt(option.dataset.quantity) || 0;
+            document.getElementById('sell-max-hint').textContent = '最多可卖 ' + maxQty + ' 股';
+
+            if (qty <= 0 || qty > maxQty) {
+                document.getElementById('sell-price-display').textContent = '—';
+                return;
+            }
+
+            const price = parseFloat(option.dataset.price) || 0;
+            const avgPrice = parseFloat(option.dataset.avg) || 0;
+            const total = price * qty;
+            const cost = avgPrice * qty;
+            const profit = total - cost;
+
+            document.getElementById('sell-price-display').textContent = price.toFixed(1) + ' 点';
+            document.getElementById('sell-total-value').textContent = total.toFixed(1) + ' 点';
+            document.getElementById('sell-cost-display').textContent = avgPrice.toFixed(1) + ' 点';
+            document.getElementById('sell-profit').textContent = (profit >= 0 ? '+' : '') + profit.toFixed(1) + ' 点';
+            document.getElementById('sell-profit').style.color = profit >= 0 ? 'var(--green)' : 'var(--red)';
+        }
+
+        async function handleBuy(e) {
+            e.preventDefault();
+            const form = e.target;
+            const formData = new FormData(form);
+            try {
+                const resp = await fetch('/api/buy', { method: 'POST', body: formData });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    setTimeout(() => location.reload(), 800);
+                } else {
+                    document.getElementById('trade-error').textContent = data.message;
+                    document.getElementById('trade-error').style.display = 'block';
+                }
+            } catch (err) {
+                document.getElementById('trade-error').textContent = '交易失败，请重试';
+                document.getElementById('trade-error').style.display = 'block';
+            }
+        }
+
+        async function handleSell(e) {
+            e.preventDefault();
+            const form = e.target;
+            const formData = new FormData(form);
+
+            const select = document.getElementById('sell-stock');
+            const qty = parseInt(document.getElementById('sell-qty').value);
+            const maxQty = parseInt(select.selectedOptions[0]?.dataset.quantity || 0);
+            
+            if (qty > maxQty) {
+                document.getElementById('trade-error').textContent = '卖出数量超过持仓';
+                document.getElementById('trade-error').style.display = 'block';
+                return;
+            }
+            
+            try {
+                const resp = await fetch('/api/sell', { method: 'POST', body: formData });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    setTimeout(() => location.reload(), 800);
+                } else {
+                    document.getElementById('trade-error').textContent = data.message;
+                    document.getElementById('trade-error').style.display = 'block';
+                }
+            } catch (err) {
+                document.getElementById('trade-error').textContent = '交易失败，请重试';
+                document.getElementById('trade-error').style.display = 'block';
+            }
+        }
+
+        async function loadKline() {
+            const stockId = document.getElementById('kline-select').value;
+            if (!stockId) return;
+            currentKlineStock = stockId;
+            await renderKline(stockId);
+        }
+
+        async function refreshKline() {
+            if (!currentKlineStock) return;
+            await renderKline(currentKlineStock);
+            showToast('K线已刷新', 'success');
+        }
+
+        async function refreshKlineSilent() {
+            if (!currentKlineStock) return;
+            await renderKline(currentKlineStock);
+        }
+
+        async function renderKline(stockId) {
+            try {
+                const resp = await fetch('/api/kline/' + stockId);
+                const data = await resp.json();
+                
+                const stock = allStocks.find(s => s.id === stockId);
+                const code = stock ? stock.code : '';
+                document.getElementById('chart-title').textContent = '📈 ' + code + ' ' + data.stock_name + ' K线图';
+                
+                const dates = data.data.map(d => d.day);
+                const ohlc = data.data.map(d => [d.open, d.close, d.low, d.high]);
+                const volumes = data.data.map(d => d.volume);
+                
+                const ma5 = calcMA(ohlc.map(d => d[1]), 5);
+                const ma10 = calcMA(ohlc.map(d => d[1]), 10);
+                const ma20 = calcMA(ohlc.map(d => d[1]), 20);
+
+                const option = {
+                    backgroundColor: '#1e2d3d',
+                    animation: false,
+                    tooltip: {
+                        trigger: 'axis',
+                        axisPointer: { type: 'cross' },
+                    },
+                    grid: [
+                        { left: '8%', right: '3%', top: '5%', height: '55%' },
+                        { left: '8%', right: '3%', top: '68%', height: '20%' }
+                    ],
+                    xAxis: [
+                        {
+                            type: 'category',
+                            data: dates,
+                            axisLine: { lineStyle: { color: '#2a3a4a' } },
+                            axisLabel: { color: '#5a6e7e', fontSize: 10 },
+                        },
+                        {
+                            type: 'category',
+                            gridIndex: 1,
+                            data: dates,
+                            axisLine: { lineStyle: { color: '#2a3a4a' } },
+                            axisLabel: { show: false },
+                        }
+                    ],
+                    yAxis: [
+                        {
+                            type: 'value',
+                            scale: true,
+                            splitLine: { lineStyle: { color: '#2a3a4a', type: 'dashed' } },
+                            axisLabel: { color: '#5a6e7e' },
+                        },
+                        {
+                            type: 'value',
+                            gridIndex: 1,
+                            splitLine: { show: false },
+                            axisLabel: { color: '#5a6e7e' },
+                        }
+                    ],
+                    series: [
+                        {
+                            name: 'K线',
+                            type: 'candlestick',
+                            data: ohlc,
+                            itemStyle: {
+                                color: '#ef5350',
+                                color0: '#26a69a',
+                                borderColor: '#ef5350',
+                                borderColor0: '#26a69a',
+                            },
+                        },
+                        {
+                            name: 'MA5',
+                            type: 'line',
+                            data: ma5,
+                            smooth: true,
+                            lineStyle: { width: 1, color: '#ffd54f' },
+                            symbol: 'none',
+                        },
+                        {
+                            name: 'MA10',
+                            type: 'line',
+                            data: ma10,
+                            smooth: true,
+                            lineStyle: { width: 1, color: '#42a5f5' },
+                            symbol: 'none',
+                        },
+                        {
+                            name: 'MA20',
+                            type: 'line',
+                            data: ma20,
+                            smooth: true,
+                            lineStyle: { width: 1, color: '#ce93d8' },
+                            symbol: 'none',
+                        },
+                        {
+                            name: '成交量',
+                            type: 'bar',
+                            xAxisIndex: 1,
+                            yAxisIndex: 1,
+                            data: volumes,
+                            itemStyle: {
+                                color: function(params) {
+                                    const idx = params.dataIndex;
+                                    if (idx >= ohlc.length) return '#26a69a';
+                                    return ohlc[idx][1] >= ohlc[idx][0] ? '#ef5350' : '#26a69a';
+                                }
+                            }
+                        }
+                    ]
+                };
+
+                klineChart.setOption(option, true);
+            } catch (err) {
+                console.error('加载K线失败:', err);
+            }
+        }
+
+        function calcMA(data, period) {
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < period - 1) {
+                    result.push('-');
+                } else {
+                    let sum = 0;
+                    for (let j = 0; j < period; j++) sum += data[i - j];
+                    result.push(+(sum / period).toFixed(2));
+                }
+            }
+            return result;
+        }
+
+        function showToast(msg, type) {
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.animation = 'slideOut 0.3s ease forwards';
+                setTimeout(() => toast.remove(), 300);
+            }, 2500);
+        }
+
+        async function resetGame() {
+            if (!confirm('确定要重置所有游戏数据吗？此操作不可撤销！\n\n将清除所有持仓、交易记录、K线数据，资金恢复为初始值。')) return;
+            try {
+                const resp = await fetch('/api/reset', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    setTimeout(() => location.reload(), 800);
+                }
+            } catch (err) {
+                showToast('重置失败', 'error');
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            if (klineChart) klineChart.resize();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>仪表盘 - 校园证券交易所</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="navbar-brand">🏦 校园证券交易所</div>
+        <div class="navbar-links">
+            <a href="/dashboard" class="active">📊 仪表盘</a>
+            <a href="/trade">💹 交易</a>
+            <a href="/quiz">📝 答题</a>
+            <a href="/api/logout">🚪 退出</a>
+        </div>
+        <div class="navbar-user">
+            <span>👤 {{ user.username }}</span>
+            <span class="cash-badge">💰 {{ "%.1f"|format(user.cash) }} 点</span>
+        </div>
+    </nav>
+
+    <!-- 游戏控制条 -->
+    <div class="game-bar">
+        <div class="game-info">
+            <span class="day-label">📅 当前进度</span>
+            <span class="day-value" id="current-day">
+                {% if state.current_day > 0 %}
+                    第 {{ state.current_day }} 天
+                {% else %}
+                    准备开始
+                {% endif %}
+            </span>
+            <span class="semester-tag" id="semester-tag">
+                {% if state.current_day > 0 %}
+                    {{ semester.short }} · 第 {{ week }} 周
+                {% else %}
+                    等待开市
+                {% endif %}
+            </span>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-bar" style="width: {{ (state.current_day / total_days * 100) if total_days > 0 else 0 }}%"></div>
+            </div>
+            <span style="font-size:12px;color:var(--text-muted)" id="progress-text">
+                {{ state.current_day }}/{{ total_days }} 天
+            </span>
+            </div>
+        <div class="game-controls">
+            {% if state.current_day >= total_days %}
+                <span style="color:var(--gold);font-weight:700;">🎉 游戏结束！</span>
+            {% else %}
+                <button id="btn-start" class="btn btn-success" onclick="startGame()">
+                    ▶ 自动推进
+                </button>
+                <button id="btn-pause" class="btn btn-outline" onclick="pauseGame()" style="display:none;">
+                    ⏸ 暂停
+                </button>
+                <button id="btn-step" class="btn btn-outline btn-sm" onclick="advanceOneDay()" title="手动推进一天">
+                    ⏭ 一天
+                </button>
+                <div class="speed-group">
+                    <button class="speed-btn active" data-speed="1" onclick="setSpeed(1)">1x</button>
+                    <button class="speed-btn" data-speed="2" onclick="setSpeed(2)">2x</button>
+                    <button class="speed-btn" data-speed="3" onclick="setSpeed(3)">3x</button>
+                </div>
+            {% endif %}
+            <button class="btn btn-sm btn-outline" onclick="resetGame()" title="重置当前存档" style="color:var(--red);border-color:rgba(239,83,80,0.4);">🔄 重置</button>
+        </div>
+    </div>
+
+    <!-- 主内容 -->
+    <div class="main-content">
+        <!-- 资产统计 -->
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="stat-label">💰 可用资金</div>
+                <div class="stat-value gold" id="stat-cash">{{ "%.1f"|format(user.cash) }}</div>
+                <div class="stat-change">可交易资金</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">📦 持仓市值</div>
+                <div class="stat-value" id="stat-market-value" style="color:var(--text-primary);">
+                    {{ "%.1f"|format(holdings|sum(attribute='market_value')) }}
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">📊 总资产</div>
+                <div class="stat-value {{ 'green' if total_profit >= 0 else 'red' }}" id="stat-total">
+                    {{ "%.1f"|format(total_assets) }}
+                </div>
+                <div class="stat-change {{ 'up' if total_profit >= 0 else 'down' }}" id="stat-profit">
+                    {% if total_profit >= 0 %}↑{% else %}↓{% endif %} {{ "%.1f"|format(total_profit) }}
+                    ({{ "%.1f"|format(total_profit / 1000 * 100) }}%)
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">🔥 活跃事件</div>
+                <div class="stat-value" style="color:var(--accent);font-size:20px;" id="stat-events">0</div>
+            </div>
+        </div>
+
+        <!-- 知识卡片 -->
+        <div class="card" style="border-color:rgba(255,213,79,0.25);background:linear-gradient(135deg, rgba(255,213,79,0.05), rgba(66,165,245,0.05));">
+            <div class="card-header" style="border-color:rgba(255,213,79,0.2);">
+                <span class="card-title">💡 今日证券小知识</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;font-size:12px;">
+                <div style="padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;">
+                    <div style="color:var(--green);font-weight:600;margin-bottom:4px;">📗 低买高卖</div>
+                    <span style="color:var(--text-secondary);">看好公司未来买入，涨价后卖出赚差价。<br>核心口诀：</span><strong style="color:var(--gold);">低买高卖赚钱，高买低卖亏钱。</strong>
+                </div>
+                <div style="padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;">
+                    <div style="color:var(--accent);font-weight:600;margin-bottom:4px;">📘 利好 vs 利空</div>
+                    <span style="color:var(--text-secondary);">利好（业绩大增、政策扶持）→ 股价易涨 ↗<br>利空（亏损、丑闻）→ 股价易跌 ↘</span>
+                </div>
+                <div style="padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;">
+                    <div style="color:var(--red);font-weight:600;margin-bottom:4px;">📕 涨跌停规则</div>
+                    <span style="color:var(--text-secondary);">单日最大涨跌 ±15%。涨停买不进，跌停卖不出，<strong style="color:var(--red);">不要追涨停板！</strong></span>
+                </div>
+                <div style="padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;">
+                    <div style="color:var(--gold);font-weight:600;margin-bottom:4px;">📙 ⚠ 杠杆双刃剑</div>
+                    <span style="color:var(--text-secondary);">收益放大，亏损也成倍放大。<br>终极风险：<strong style="color:var(--red);">爆仓 → 本金全部亏空！</strong></span>
+                </div>
+                <div style="padding:10px;background:rgba(0,0,0,0.2);border-radius:6px;">
+                    <div style="color:#ff9800;font-weight:600;margin-bottom:4px;">📓 ⚠ 退市制度</div>
+                    <span style="color:var(--text-secondary);">严重违规/持续亏损 → 被踢出市场。<br><strong style="color:var(--red);">不碰*ST风险股！</strong></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="page-grid page-grid-3">
+            <!-- 持仓表格 -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">📦 我的持仓</span>
+                </div>
+                {% if holdings %}
+                <div class="table-scroll">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>股票</th>
+                                <th>代码</th>
+                                <th>类型</th>
+                                <th>持仓量</th>
+                                <th>成本价</th>
+                                <th>现价</th>
+                                <th>市值</th>
+                                <th>盈亏</th>
+                                <th>杠杆</th>
+                            </tr>
+                        </thead>
+                        <tbody id="holdings-table">
+                            {% for h in holdings %}
+                            <tr>
+                                <td><strong>{{ h.stock_name }}</strong></td>
+                                <td style="font-family:Consolas,monospace;font-size:12px;color:var(--text-muted);">{{ h.code }}</td>
+                                <td><span class="tag tag-{{ 'hot' if h.category == '热门社团' else 'normal' if h.category == '普通社团' else 'potential' }}">{{ h.category }}</span></td>
+                                <td>{{ h.quantity }}</td>
+                                <td class="price-cell">{{ "%.1f"|format(h.avg_price) }}</td>
+                                <td class="price-cell" data-sid="{{ h.stock_id }}">{{ "%.1f"|format(h.current_price) }}</td>
+                                <td class="price-cell">{{ "%.1f"|format(h.market_value) }}</td>
+                                <td class="{{ 'up' if h.profit >= 0 else 'down' }}">
+                                    {{ '%.1f'|format(h.profit) }}
+                                    <br><small>({{ '%+.1f'|format(h.leveraged_return) }}%)</small>
+                                </td>
+                                <td>{{ h.leverage }}x</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-state">
+                    <div class="icon">📭</div>
+                    <p>还没有持仓，快去交易吧！</p>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- 新闻公告 + 行情总览 -->
+            <div style="display:flex;flex-direction:column;gap:16px;">
+                <!-- 新闻公告（显眼位置：行情上方） -->
+                <div class="card" style="border-color:rgba(255,213,79,0.3);">
+                    <div class="card-header">
+                        <span class="card-title">📰 新闻公告</span>
+                        <span style="font-size:11px;color:var(--text-muted);">📢 已发布 · 🔥 生效中</span>
+                    </div>
+                    <div class="table-scroll" style="max-height:240px;" id="news-panel">
+                        {% if news %}
+                        {% for n in news %}
+                        <div class="news-item" style="padding:10px 12px;border-bottom:1px solid rgba(42,58,74,0.5);">
+                            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
+                                <strong style="font-size:13px;">{{ n.title }}</strong>
+                                <span class="event-status {{ n.status }}" style="flex-shrink:0;margin-left:8px;">{{ n.status_label }}</span>
+                            </div>
+                            <div style="font-size:12px;color:var(--text-secondary);line-height:1.4;">{{ n.description[:80] }}{% if n.description|length > 80 %}...{% endif %}</div>
+                        </div>
+                        {% endfor %}
+                        {% else %}
+                        <div class="empty-state" style="padding:20px;">
+                            <p style="font-size:12px;">暂无新闻事件</p>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- 行情总览（新闻下方） -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">📈 行情总览</span>
+                        <span style="font-size:11px;color:var(--text-muted);">点击跳转K线</span>
+                    </div>
+                    <div class="table-scroll" style="max-height:320px;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>代码</th>
+                                    <th>股票</th>
+                                    <th>类型</th>
+                                    <th>现价</th>
+                                    <th>涨跌</th>
+                                </tr>
+                            </thead>
+                            <tbody id="market-table">
+                                {% for m in market_data %}
+                                <tr class="clickable-row" onclick="goToTrade('{{ m.id }}')" title="点击查看 {{ m.name }} K线图">
+                                    <td style="font-family:Consolas,monospace;font-size:12px;color:var(--accent);">{{ m.code }}</td>
+                                    <td><strong>{{ m.name }}</strong></td>
+                                    <td><span class="tag tag-{{ 'hot' if m.category == '热门社团' else 'normal' if m.category == '普通社团' else 'potential' }}">{{ m.category }}</span></td>
+                                    <td class="price-cell" data-sid="{{ m.id }}">{{ "%.1f"|format(m.price) }}</td>
+                                    <td class="{{ 'up' if m.change >= 0 else 'down' }}">
+                                        <span class="price-cell">{{ '%+.1f'|format(m.change) }}</span>
+                                        <br><small>({{ '%+.1f'|format(m.change_pct) }}%)</small>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let gameTimer = null;
+        let pendingRequest = false;
+        let autoAdvanceEnabled = false;
+        let gameSpeed = 1;
+        const BASE_INTERVAL = 10000; // 10秒/天
+
+        window.addEventListener('DOMContentLoaded', () => {
+            syncUI(false);
+        });
+
+        function syncUI(running) {
+            document.getElementById('btn-start').style.display = running ? 'none' : 'inline-flex';
+            document.getElementById('btn-pause').style.display = running ? 'inline-flex' : 'none';
+        }
+
+        function startGame() {
+            autoAdvanceEnabled = true;
+            syncUI(true);
+            scheduleNext();
+        }
+
+        function pauseGame() {
+            autoAdvanceEnabled = false;
+            syncUI(false);
+            clearGameTimer();
+            pendingRequest = false;
+        }
+
+        function clearGameTimer() {
+            if (gameTimer) { clearTimeout(gameTimer); gameTimer = null; }
+        }
+
+        function scheduleNext() {
+            clearGameTimer();
+            if (!autoAdvanceEnabled) return;
+            const delay = Math.round(BASE_INTERVAL / gameSpeed);
+            gameTimer = setTimeout(autoAdvanceTick, delay);
+        }
+
+        function setSpeed(speed) {
+            gameSpeed = speed;
+            document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+            const btn = document.querySelector('.speed-btn[data-speed="' + speed + '"]');
+            if (btn) btn.classList.add('active');
+            clearGameTimer();
+            if (!pendingRequest && autoAdvanceEnabled) {
+                autoAdvanceTick();
+            }
+        }
+
+        async function autoAdvanceTick() {
+            if (!autoAdvanceEnabled || pendingRequest) return;
+            pendingRequest = true;
+
+            try {
+                const resp = await fetch('/api/advance_day', { method: 'POST' });
+                const data = await resp.json();
+                
+                if (data.game_over) {
+                    autoAdvanceEnabled = false;
+                    syncUI(false);
+                    clearGameTimer();
+                    showToast('🎉 游戏结束！', 'success');
+                    setTimeout(() => location.reload(), 2500);
+                    return;
+                }
+
+                if (data.break_notice) {
+                    autoAdvanceEnabled = false;
+                    syncUI(false);
+                    clearGameTimer();
+                    showToast('🏖️ ' + data.break_notice + ' 游戏已暂停，点击"自动推进"继续～', 'success');
+                    setTimeout(() => location.reload(), 3500);
+                    return;
+                }
+
+                updateDashboard(data);
+            } catch (err) {
+                console.error('推进失败:', err);
+            }
+
+            pendingRequest = false;
+            scheduleNext();
+        }
+
+        async function advanceOneDay() {
+            if (pendingRequest) return;
+            pendingRequest = true;
+            const btn = document.getElementById('btn-step');
+            btn.disabled = true;
+            btn.textContent = '⏳ ...';
+
+            try {
+                const resp = await fetch('/api/advance_day', { method: 'POST' });
+                const data = await resp.json();
+                
+                if (data.game_over) {
+                    autoAdvanceEnabled = false;
+                    syncUI(false);
+                    clearGameTimer();
+                    showToast('🎉 游戏结束！', 'success');
+                    setTimeout(() => location.reload(), 2500);
+                    return;
+                }
+
+                if (data.break_notice) {
+                    showToast('🏖️ ' + data.break_notice + ' 游戏已暂停～', 'success');
+                    setTimeout(() => location.reload(), 3500);
+                    return;
+                }
+
+                updateDashboard(data);
+            } catch (err) {
+                console.error('推进失败:', err);
+                showToast('推进失败，请重试', 'error');
+            }
+
+            pendingRequest = false;
+            btn.disabled = false;
+            btn.textContent = '⏭ 一天';
+        }
+
+        function updateDashboard(data) {
+            document.getElementById('current-day').textContent = '第 ' + data.day + ' 天';
+            document.getElementById('progress-bar').style.width = (data.day / {{ total_days }} * 100).toFixed(1) + '%';
+            document.getElementById('progress-text').textContent = data.day + '/{{ total_days }} 天';
+
+            // 更新学期标签
+            if (data.day > 0) {
+                fetch('/api/game_state')
+                    .then(r => r.json())
+                    .then(state => {
+                        document.getElementById('semester-tag').textContent = 
+                            state.semester.short + ' · 第 ' + state.week + ' 周';
+                    });
+            }
+
+            // 更新活跃事件计数
+            if (data.active_event_count !== undefined) {
+                document.getElementById('stat-events').textContent = data.active_event_count;
+            }
+
+            // 更新行情价格
+            if (data.prices_simple) {
+                document.querySelectorAll('[data-sid]').forEach(el => {
+                    const sid = el.dataset.sid;
+                    if (data.prices_simple[sid] !== undefined) {
+                        const oldPrice = parseFloat(el.textContent);
+                        const newPrice = data.prices_simple[sid];
+                        if (!isNaN(oldPrice) && oldPrice !== newPrice) {
+                            el.textContent = newPrice.toFixed(1);
+                            const row = el.closest('tr');
+                            if (row) {
+                                row.classList.remove('flash-green', 'flash-red');
+                                row.classList.add(newPrice > oldPrice ? 'flash-green' : 'flash-red');
+                            }
+                        }
+                    }
+                });
+            }
+
+            // 有新事件或平仓时刷新持仓和新闻
+            if ((data.liquidated && data.liquidated.length > 0) || (data.new_events && data.new_events.length > 0)) {
+                refreshPortfolio();
+                fetch(window.location.href)
+                    .then(r => r.text())
+                    .then(html => {
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+                        const newsPanel = doc.getElementById('news-panel');
+                        if (newsPanel) {
+                            document.getElementById('news-panel').innerHTML = newsPanel.innerHTML;
+                        }
+                    });
+            }
+        }
+
+        async function refreshPortfolio() {
+            try {
+                const resp = await fetch('/api/portfolio');
+                const data = await resp.json();
+                document.getElementById('stat-cash').textContent = data.cash.toFixed(1);
+                document.getElementById('stat-market-value').textContent = data.total_market_value.toFixed(1);
+                const totalProfit = data.total_assets - 1000;
+                const profitEl = document.getElementById('stat-total');
+                profitEl.textContent = data.total_assets.toFixed(1);
+                profitEl.className = 'stat-value ' + (totalProfit >= 0 ? 'green' : 'red');
+                document.getElementById('stat-profit').textContent = 
+                    (totalProfit >= 0 ? '↑ ' : '↓ ') + Math.abs(totalProfit).toFixed(1) + ' (' + (totalProfit/10).toFixed(1) + '%)';
+            } catch (err) {
+                console.error('刷新持仓失败:', err);
+            }
+        }
+
+        function showToast(msg, type) {
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.animation = 'slideOut 0.3s ease forwards';
+                setTimeout(() => toast.remove(), 300);
+            }, 2000);
+        }
+
+        async function resetGame() {
+            if (!confirm('确定要重置所有游戏数据吗？此操作不可撤销！\n\n将清除所有持仓、交易记录、K线数据，资金恢复为初始值。')) return;
+            try {
+                const resp = await fetch('/api/reset', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    setTimeout(() => location.reload(), 800);
+                }
+            } catch (err) {
+                showToast('重置失败', 'error');
+            }
+        }
+    </script>
+</body>
+</html>
